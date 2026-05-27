@@ -7,7 +7,7 @@ Creación de un Sistema de Gestión de Libros electrónicos.
 - Visualización de libros
 
 ## Tecnologías
-- Go (Golang)
+- Go 
 
 ## Autor
 Angel
