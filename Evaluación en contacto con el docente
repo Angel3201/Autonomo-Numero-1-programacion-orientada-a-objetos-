@@ -1,0 +1,337 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+)
+
+// Interfaz
+
+type Mostrable interface {
+	MostrarInformacion()
+}
+
+// Estructura Libro
+type Libro struct {
+	Titulo     string `json:"titulo"`
+	Autor      string `json:"autor"`
+	Categoria  string `json:"categoria"`
+	Disponible bool   `json:"disponible"`
+}
+
+// Constructor
+func NuevoLibro(titulo, autor, categoria string) Libro {
+	return Libro{
+		Titulo:     titulo,
+		Autor:      autor,
+		Categoria:  categoria,
+		Disponible: true,
+	}
+}
+
+// Métodos Getters
+func (l Libro) ObtenerTitulo() string {
+	return l.Titulo
+}
+
+func (l Libro) ObtenerAutor() string {
+	return l.Autor
+}
+
+func (l Libro) ObtenerCategoria() string {
+	return l.Categoria
+}
+
+// Método para mostrar información
+func (l Libro) MostrarInformacion() {
+	fmt.Println("---------------------------")
+	fmt.Println("Título:", l.Titulo)
+	fmt.Println("Autor:", l.Autor)
+	fmt.Println("Categoría:", l.Categoria)
+
+	if l.Disponible {
+		fmt.Println("Estado: Disponible")
+	} else {
+		fmt.Println("Estado: Prestado")
+	}
+
+	fmt.Println("---------------------------")
+}
+
+// Método para cambiar disponibilidad
+func (l *Libro) CambiarDisponibilidad(estado bool) {
+	l.Disponible = estado
+}
+
+var catalogo []Libro
+var mutex sync.Mutex
+
+func main() {
+
+	http.HandleFunc("/libros", manejarLibros)
+	http.HandleFunc("/libros/", manejarLibroPorTitulo)
+	http.HandleFunc("/prestamos", registrarPrestamo)
+	http.HandleFunc("/devoluciones", registrarDevolucion)
+	http.HandleFunc("/estado", estadoServidor)
+
+	fmt.Println("Servidor iniciado en:")
+	fmt.Println("http://localhost:8080")
+
+	err := http.ListenAndServe(":8080", nil)
+
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+// get libros
+// post libros
+
+func manejarLibros(w http.ResponseWriter, r *http.Request) {
+
+	switch r.Method {
+
+	case http.MethodGet:
+		obtenerLibros(w, r)
+
+	case http.MethodPost:
+		crearLibro(w, r)
+
+	default:
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+	}
+}
+
+// get libros titulo
+// put libros titulo
+
+func manejarLibroPorTitulo(w http.ResponseWriter, r *http.Request) {
+
+	titulo := strings.TrimPrefix(r.URL.Path, "/libros/")
+
+	switch r.Method {
+
+	case http.MethodGet:
+		buscarLibro(w, titulo)
+
+	case http.MethodPut:
+		actualizarLibro(w, r, titulo)
+
+	case http.MethodDelete:
+		eliminarLibro(w, titulo)
+
+	default:
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+	}
+}
+
+// get libros
+
+func obtenerLibros(w http.ResponseWriter, r *http.Request) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(catalogo)
+}
+
+// post libro
+
+func crearLibro(w http.ResponseWriter, r *http.Request) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	var libro Libro
+
+	err := json.NewDecoder(r.Body).Decode(&libro)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if libro.Titulo == "" {
+		http.Error(w, "El título no puede estar vacío", http.StatusBadRequest)
+		return
+	}
+
+	libro.Disponible = true
+
+	catalogo = append(catalogo, libro)
+
+	w.WriteHeader(http.StatusCreated)
+
+	json.NewEncoder(w).Encode(libro)
+}
+
+// get libro
+
+func buscarLibro(w http.ResponseWriter, titulo string) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	for _, libro := range catalogo {
+
+		if strings.EqualFold(libro.Titulo, titulo) {
+
+			json.NewEncoder(w).Encode(libro)
+			return
+		}
+	}
+
+	http.Error(w, "Libro no encontrado", http.StatusNotFound)
+}
+
+// put libro
+
+func actualizarLibro(w http.ResponseWriter, r *http.Request, titulo string) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	var datos Libro
+
+	err := json.NewDecoder(r.Body).Decode(&datos)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	for i := range catalogo {
+
+		if strings.EqualFold(catalogo[i].Titulo, titulo) {
+
+			catalogo[i].Autor = datos.Autor
+			catalogo[i].Categoria = datos.Categoria
+
+			json.NewEncoder(w).Encode(catalogo[i])
+			return
+		}
+	}
+
+	http.Error(w, "Libro no encontrado", http.StatusNotFound)
+}
+
+// delete librp
+
+func eliminarLibro(w http.ResponseWriter, titulo string) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	for i := range catalogo {
+
+		if strings.EqualFold(catalogo[i].Titulo, titulo) {
+
+			catalogo = append(catalogo[:i], catalogo[i+1:]...)
+
+			fmt.Fprintln(w, "Libro eliminado correctamente")
+			return
+		}
+	}
+
+	http.Error(w, "Libro no encontrado", http.StatusNotFound)
+}
+
+// post prestamo
+
+func registrarPrestamo(w http.ResponseWriter, r *http.Request) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	var datos map[string]string
+
+	json.NewDecoder(r.Body).Decode(&datos)
+
+	titulo := datos["titulo"]
+
+	for i := range catalogo {
+
+		if strings.EqualFold(catalogo[i].Titulo, titulo) {
+
+			if !catalogo[i].Disponible {
+
+				http.Error(w, "El libro ya está prestado", http.StatusBadRequest)
+				return
+			}
+
+			catalogo[i].CambiarDisponibilidad(false)
+
+			fmt.Fprintln(w, "Préstamo registrado correctamente")
+			return
+		}
+	}
+
+	http.Error(w, "Libro no encontrado", http.StatusNotFound)
+}
+
+// post devolucion
+
+func registrarDevolucion(w http.ResponseWriter, r *http.Request) {
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	var datos map[string]string
+
+	json.NewDecoder(r.Body).Decode(&datos)
+
+	titulo := datos["titulo"]
+
+	for i := range catalogo {
+
+		if strings.EqualFold(catalogo[i].Titulo, titulo) {
+
+			catalogo[i].CambiarDisponibilidad(true)
+
+			fmt.Fprintln(w, "Devolución registrada correctamente")
+			return
+		}
+	}
+
+	http.Error(w, "Libro no encontrado", http.StatusNotFound)
+}
+
+// get estado
+
+func estadoServidor(w http.ResponseWriter, r *http.Request) {
+
+	fmt.Fprintln(w, "Servidor funcionando correctamente")
+}
+
+func registrarLibro() error {
+
+	var titulo string
+	var autor string
+	var categoria string
+
+	fmt.Print("Título: ")
+	fmt.Scan(&titulo)
+
+	fmt.Print("Autor: ")
+	fmt.Scan(&autor)
+
+	fmt.Print("Categoría: ")
+	fmt.Scan(&categoria)
+
+	if titulo == "" {
+		return errors.New("el título no puede estar vacío")
+	}
+
+	libro := NuevoLibro(titulo, autor, categoria)
+
+	catalogo = append(catalogo, libro)
+
+	fmt.Println("Libro registrado correctamente")
+
+	return nil
+}
